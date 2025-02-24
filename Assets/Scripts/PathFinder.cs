@@ -21,6 +21,8 @@ public class Pathfinder : Kinematic
     private Material defaultMaterial;
 
     private float originalMaxSpeed;
+    private bool isCollidingWithBlueConnection = false; // Flag to track blue connection collision
+    private BoxCollider pathfinderCollider; // Reference to the Pathfinder's BoxCollider
 
     // Start is called before the first frame update
     void Start()
@@ -46,15 +48,26 @@ public class Pathfinder : Kinematic
         myMoveType.path = myPath;
 
         originalMaxSpeed = maxSpeed;
+        pathfinderCollider = GetComponent<BoxCollider>(); // Get Pathfinder's BoxCollider
+        if (pathfinderCollider == null)
+        {
+            Debug.LogError("Pathfinder GameObject needs a BoxCollider for intersection calculation.");
+        }
     }
 
     // Update is called once per frame
     protected override void Update()
     {
+        isCollidingWithBlueConnection = false; // Reset flag at the beginning of each frame
         steeringUpdate = new SteeringOutput();
         steeringUpdate.angular = myRotateType.getSteering().angular;
         steeringUpdate.linear = myMoveType.getSteering().linear;
         base.Update();
+
+        if (!isCollidingWithBlueConnection) // Reset speed if not colliding with any blue connection this frame
+        {
+            maxSpeed = originalMaxSpeed;
+        }
 
         if (myMoveType.path != null && myMoveType.pathIndex < myMoveType.path.Length)
         {
@@ -156,22 +169,60 @@ public class Pathfinder : Kinematic
         return candidates[Random.Range(0, candidates.Count)];
     }
 
-    // Trigger collision detection for speed penalty
-    private void OnTriggerEnter(Collider other)
+    // Trigger collision detection for speed penalty - using OnTriggerStay now
+    private void OnTriggerStay(Collider other)
     {
         Connection connection = other.GetComponent<Connection>();
-        if (connection != null && connection.IsBlue)
+        if (connection != null && connection.IsBlue && pathfinderCollider != null)
         {
-            maxSpeed = originalMaxSpeed / 3;
+            BoxCollider connectionCollider = other as BoxCollider;
+            if (connectionCollider != null)
+            {
+                if (IsLargeIntersection(pathfinderCollider, connectionCollider, 0.2f))
+                {
+                    isCollidingWithBlueConnection = true;
+                    maxSpeed = originalMaxSpeed / 3;
+                }
+            }
         }
     }
 
-    private void OnTriggerExit(Collider other)
+
+    // Helper function to check if the intersection volume is at least a certain percentage of colliderA's volume
+    private bool IsLargeIntersection(BoxCollider colliderA, BoxCollider colliderB, float percentageThreshold)
     {
-        Connection connection = other.GetComponent<Connection>();
-        if (connection != null && connection.IsBlue)
+        Bounds boundsA = colliderA.bounds;
+        Bounds boundsB = colliderB.bounds;
+
+        Bounds intersectionBounds = GetIntersectionBounds(boundsA, boundsB);
+
+        if (intersectionBounds.size == Vector3.zero) // No intersection
         {
-            maxSpeed = originalMaxSpeed;
+            return false;
         }
+
+        float intersectionVolume = intersectionBounds.size.x * intersectionBounds.size.y * intersectionBounds.size.z;
+        float colliderAVolume = boundsA.size.x * boundsA.size.y * boundsA.size.z;
+
+        if (colliderAVolume == 0) return false; // Avoid division by zero if collider A has zero volume
+
+        float intersectionPercentage = intersectionVolume / colliderAVolume;
+        return intersectionPercentage >= percentageThreshold;
+    }
+
+
+    private Bounds GetIntersectionBounds(Bounds boundsA, Bounds boundsB)
+    {
+        // Calculate min and max points of intersection
+        Vector3 minPoint = Vector3.Max(boundsA.min, boundsB.min);
+        Vector3 maxPoint = Vector3.Min(boundsA.max, boundsB.max);
+
+        // If there's no overlap, return zero size bounds
+        if (minPoint.x >= maxPoint.x || minPoint.y >= maxPoint.y || minPoint.z >= maxPoint.z)
+        {
+            return new Bounds(Vector3.zero, Vector3.zero);
+        }
+
+        return new Bounds(minPoint + (maxPoint - minPoint) * 0.5f, maxPoint - minPoint); // Center and size
     }
 }
